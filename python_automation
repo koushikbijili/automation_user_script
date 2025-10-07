@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+"""
+launch_and_terminate.py
+- Launches 5 EC2 instances and terminates them automatically after 3 minutes.
+- Designed for IAM users with limited permissions (no CreateKeyPair or DescribeVpcs access).
+"""
+
+import os
+import time
+import sys
+import boto3
+from botocore.exceptions import ClientError
+
+# ==================== CONFIG ====================
+REGION = "ap-south-1"             # change region if needed
+INSTANCE_TYPE = "t2.micro"        # free-tier eligible
+MIN_COUNT = 5                     # number of instances to launch
+MAX_COUNT = 5
+TERMINATE_DELAY_SECONDS = 180     # 3 minutes
+# =================================================
+
+def get_latest_amzn2_ami(ssm_client):
+    """Fetch the latest Amazon Linux 2 AMI ID from SSM Parameter Store."""
+    param = "/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2"
+    try:
+        resp = ssm_client.get_parameters(Names=[param])
+        val = resp.get("Parameters", [{}])[0].get("Value")
+        if not val:
+            raise RuntimeError("Couldn't fetch AMI ID from SSM.")
+        return val
+    except Exception as e:
+        print("Error getting AMI from SSM:", e)
+        sys.exit(1)
+
+def main():
+    print("🚀 Starting EC2 Launch Script")
+    print(f"Region: {REGION}")
+    print(f"Instance Type: {INSTANCE_TYPE}")
+    print(f"Count: {MIN_COUNT}")
+    print(f"Terminate after: {TERMINATE_DELAY_SECONDS} seconds\n")
+
+    session = boto3.Session(region_name=REGION)
+    ec2 = session.client("ec2")
+    ssm = session.client("ssm")
+
+    # Step 1: Get the latest Amazon Linux 2 AMI
+    ami_id = get_latest_amzn2_ami(ssm)
+    print(f"✅ Using AMI ID: {ami_id}")
+
+    # Step 2: Launch EC2 Instances
+    params = {
+        "ImageId": ami_id,
+        "InstanceType": INSTANCE_TYPE,
+        "MinCount": MIN_COUNT,
+        "MaxCount": MAX_COUNT,
+        "TagSpecifications": [
+            {
+                "ResourceType": "instance",
+                "Tags": [{"Key": "Name", "Value": "auto-launch-3min"}]
+            }
+        ]
+    }
+
+    try:
+        response = ec2.run_instances(**params)
+    except ClientError as e:
+        print("❌ Failed to launch instances:", e)
+        sys.exit(1)
+
+    instance_ids = [inst["InstanceId"] for inst in response["Instances"]]
+    print(f"✅ Instances launched: {instance_ids}")
+
+    # Step 3: Wait for instances to be running
+    print("⏳ Waiting for instances to enter 'running' state...")
+    waiter = ec2.get_waiter("instance_running")
+    try:
+        waiter.wait(InstanceIds=instance_ids, WaiterConfig={"Delay": 5, "MaxAttempts": 60})
+    except Exception as e:
+        print("⚠️ Waiter warning:", e)
+
+    # Step 4: Display instance info
+    try:
+        desc = ec2.describe_instances(InstanceIds=instance_ids)
+        for r in desc["Reservations"]:
+            for i in r["Instances"]:
+                iid = i["InstanceId"]
+                ip = i.get("PublicIpAddress", "NO_PUBLIC_IP")
+                state = i["State"]["Name"]
+                print(f"   {iid} - {state} - {ip}")
+    except Exception as e:
+        print("⚠️ Could not describe instances:", e)
+
+    # Step 5: Wait for 3 minutes
+    print(f"\n⏲️  Sleeping for {TERMINATE_DELAY_SECONDS} seconds...")
+    time.sleep(TERMINATE_DELAY_SECONDS)
+
+    # Step 6: Terminate instances
+    print(f"\n🛑 Terminating instances: {instance_ids}")
+    try:
+        ec2.terminate_instances(InstanceIds=instance_ids)
+    except Exception as e:
+        print("❌ Failed to terminate instances:", e)
+        sys.exit(1)
+
+    # Step 7: Wait for termination
+    print("⏳ Waiting for instances to terminate...")
+    waiter2 = ec2.get_waiter("instance_terminated")
+    try:
+        waiter2.wait(InstanceIds=instance_ids, WaiterConfig={"Delay": 5, "MaxAttempts": 60})
+    except Exception as e:
+        print("⚠️ Termination waiter error:", e)
+
+    print("\n✅ All instances terminated successfully. Task complete!")
+
+if __name__ == "__main__":
+    main()
