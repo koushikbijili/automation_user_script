@@ -47,7 +47,3 @@ This repository contains a **Python script** that automates the launch of multip
 * Logging could be improved by adding AWS CloudTrail or CloudWatch logs if you extend the script.
 * If you want to use a different AMI, you can modify the `get_latest_amzn2_ami` function or supply a static AMI ID.
 ---
-
-If you'd like, I can also generate a **CHANGELOG.md**, **ISSUE_TEMPLATE.md**, or **CONTRIBUTING.md** for this repo to make it more complete. Would you like that?
-::contentReference[oaicite:0]{index=0}
-```
